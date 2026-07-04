@@ -47,23 +47,21 @@ public:
 
     // 启动一键换型
     void StartModelChange(const QString& deviceCode, const QString& deviceIp);
-    // 外部硬件/界面通知：本地机械换型动作完成
-    void NotifyLocalModelComplete();
+
     // 强制终止整个换型流程
     void StopModelChange();
 
     // 获取当前流程步骤
     ModelChangeStep GetCurrentStep() const;
+
     // 获取最新错误文本
     QString GetLastErrorMsg() const;
 
 signals:
-    // 向外请求实时设备状态
-    void SignalRequestDeviceStatus();
+
     // 通知UI执行确认换型逻辑
     void SignalExecuteProductModelSwitch(const QString& productModel);
-    // 流程步骤切换通知
-    void SignalStepChanged(ModelChangeStep step);
+
     // 整个换型流程最终结束回调
     void SignalModelChangeFinished(ModelChangeResult result, const QString& msg);
     // 产生设备告警，对外推送
@@ -100,6 +98,9 @@ private:
     void UploadAlarm(const QString& alarmText);
     void UploadDeviceStatus(const QString& status);
 
+    //接口返回换型动作完成
+    void NotifyLocalModelComplete();
+
 private:
     ControlCenterHttpApi* m_ctrlApi;
     MesHttpPost* m_mesApi;
@@ -111,6 +112,8 @@ private:
     QString m_deviceIp;
     ModelChangeStep m_curStep;
     QString m_lastError;
+
+    bool m_modelChange;
     bool m_localModelComplete;
     bool m_waitingDevStatus;    // 标记当前是否等待外部回传设备状态
     bool m_waitProductSwitch;   // 标记当前是否等待产品配方切换完成

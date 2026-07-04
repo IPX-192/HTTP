@@ -118,6 +118,7 @@ QString MesHttpPost::SendMesPostRequestImpl(ReplyStatus reqType, const QString& 
     QByteArray postData = doc.toJson(QJsonDocument::Compact);
     QNetworkReply* reply = m_httpPost.post(netReq, postData);
 
+    //组装本次请求上下文，存入全局 map 缓存
     MesRequestContext ctx;
     ctx.reqType = reqType;
     ctx.reply = reply;
@@ -133,26 +134,24 @@ QString MesHttpPost::SendMesPostRequestImpl(ReplyStatus reqType, const QString& 
     if (!waitOk)
     {
         outMsg = u8"HTTP请求超时30秒";
-        HandleRequestError(reply);
-        m_reqRunning[reqType] = false;
+        HandleRequestError(reply, reqType);
         return outMsg;
     }
 
+    // 请求完成后，从 map 取出上下文并删除缓存
     MesRequestContext finishCtx = m_reqMap.take(reply);
     QByteArray respBytes = finishCtx.respData;
     int httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     if (httpCode < 200 || httpCode >= 300)
     {
         outMsg = QString("服务响应异常，HTTP状态码：%1").arg(httpCode);
-        finishCtx.reply->deleteLater();
-        m_reqRunning[reqType] = false;
+        HandleRequestError(reply, reqType);
         return outMsg;
     }
     if (respBytes.isEmpty())
     {
         outMsg = "MES返回空数据";
-        finishCtx.reply->deleteLater();
-        m_reqRunning[reqType] = false;
+        HandleRequestError(reply, reqType);
         return outMsg;
     }
 
@@ -161,8 +160,7 @@ QString MesHttpPost::SendMesPostRequestImpl(ReplyStatus reqType, const QString& 
     if (jsonErr.error != QJsonParseError::NoError)
     {
         outMsg = QString("JSON解析失败:%1").arg(jsonErr.errorString());
-        finishCtx.reply->deleteLater();
-        m_reqRunning[reqType] = false;
+        HandleRequestError(reply, reqType);
         return outMsg;
     }
     QJsonObject jsonObj = jsonDoc.object();
@@ -354,6 +352,7 @@ QString MesHttpPost::SendMesPostRequestImpl(ReplyStatus reqType, const QString& 
         outMsg = m_parseErrMap.value(reqKey);
     }
 
+    //流程结束，统一释放
     finishCtx.reply->deleteLater();
     m_reqRunning[reqType] = false;
     return outMsg;
@@ -395,7 +394,7 @@ QString MesHttpPost::SendMultipartUploadRequest(const GatewayUploadHeader& heade
     if (fileName.isEmpty() || fileBin.isEmpty())
     {
         outMsg = "文件名或文件二进制内容不能为空";
-        m_reqRunning[replyUploadSingle] = false;
+        HandleRequestError(nullptr, replyUploadSingle);
         return outMsg;
     }
 
@@ -428,7 +427,7 @@ QString MesHttpPost::SendMultipartUploadRequest(const GatewayUploadHeader& heade
     const QByteArray endBound = QString("--%1--\r\n").arg(MES_UPLOAD_BOUNDARY).toUtf8();
 
     // 封装通用表单字段写入逻辑
-    auto addFormField = [&](const QString& name, const QString& value)
+    auto addFormField = [&postData, &bound](const QString& name, const QString& value)
     {
         postData += bound;
         postData += QString("Content-Disposition: form-data; name=\"%1\"\r\n\r\n").arg(name).toUtf8();
@@ -464,8 +463,7 @@ QString MesHttpPost::SendMultipartUploadRequest(const GatewayUploadHeader& heade
     if (!reply)
     {
         outMsg = "创建网络POST请求失败";
-        HandleRequestError(reply);
-        m_reqRunning[replyUploadSingle] = false;
+        HandleRequestError(reply, replyUploadSingle);
         return outMsg;
     }
 
@@ -482,7 +480,7 @@ QString MesHttpPost::SendMultipartUploadRequest(const GatewayUploadHeader& heade
     if (!waitOk)
     {
         outMsg = "文件上传请求超时30秒";
-        HandleRequestError(reply);
+        HandleRequestError(reply, replyUploadSingle);
         return outMsg;
     }
 
@@ -490,8 +488,7 @@ QString MesHttpPost::SendMultipartUploadRequest(const GatewayUploadHeader& heade
     if (!m_reqMap.contains(reply))
     {
         outMsg = "请求上下文丢失，响应处理异常";
-        reply->deleteLater();
-        m_reqRunning[replyUploadSingle] = false;
+        HandleRequestError(reply, replyUploadSingle);
         return outMsg;
     }
     MesRequestContext finishCtx = m_reqMap.take(reply);
@@ -509,8 +506,7 @@ QString MesHttpPost::SendMultipartUploadRequest(const GatewayUploadHeader& heade
                 errorText = errorText.left(UPLOAD_ERR_TRUNCATE_LEN) + "...";
             outMsg += QString("，响应内容：%1").arg(errorText);
         }
-        reply->deleteLater();
-        m_reqRunning[replyUploadSingle] = false;
+        HandleRequestError(reply, replyUploadSingle);
         return outMsg;
     }
 
@@ -519,8 +515,7 @@ QString MesHttpPost::SendMultipartUploadRequest(const GatewayUploadHeader& heade
     if (respBytes.isEmpty())
     {
         outMsg = "上传网关返回空数据";
-        reply->deleteLater();
-        m_reqRunning[replyUploadSingle] = false;
+        HandleRequestError(reply, replyUploadSingle);
         return outMsg;
     }
 
@@ -535,8 +530,7 @@ QString MesHttpPost::SendMultipartUploadRequest(const GatewayUploadHeader& heade
         outMsg = QString("上传返回JSON解析失败：%1，原始响应：%2")
                 .arg(jsonErr.errorString())
                 .arg(respText);
-        reply->deleteLater();
-        m_reqRunning[replyUploadSingle] = false;
+        HandleRequestError(reply, replyUploadSingle);
         return outMsg;
     }
 
@@ -550,12 +544,12 @@ QString MesHttpPost::SendMultipartUploadRequest(const GatewayUploadHeader& heade
     }
 
     // 资源释放、解锁
-    reply->deleteLater();
+    finishCtx.reply->deleteLater();
     m_reqRunning[replyUploadSingle] = false;
     return outMsg;
 }
 
-void MesHttpPost::HandleRequestError(QNetworkReply* reply)
+void MesHttpPost::HandleRequestError(QNetworkReply* reply, ReplyStatus reqType)
 {
     if (reply)
     {
@@ -563,6 +557,8 @@ void MesHttpPost::HandleRequestError(QNetworkReply* reply)
         ClearRequestContext(reply);
         reply->deleteLater();
     }
+    // 根据当前接口类型释放专属防并发锁
+    m_reqRunning[reqType] = false;
 }
 
 void MesHttpPost::ClearRequestContext(QNetworkReply* reply)

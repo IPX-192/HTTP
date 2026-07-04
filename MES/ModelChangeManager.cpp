@@ -3,6 +3,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QCoreApplication>
+#include "VisAppBus.h"
 
 ModelChangeManager::ModelChangeManager(QObject *parent) : QObject(parent)
 {
@@ -46,7 +47,7 @@ void ModelChangeManager::StartModelChange(const QString &deviceCode, const QStri
     m_lastError.clear();
 
     m_pollTimer.start();
-    emit SignalStepChanged(m_curStep);
+
 }
 
 void ModelChangeManager::NotifyLocalModelComplete()
@@ -58,7 +59,7 @@ void ModelChangeManager::NotifyLocalModelComplete()
 
     // 本地换型完成，流转下一步：获取生产任务
     m_curStep = Step_GetTaskInfo;
-    emit SignalStepChanged(m_curStep);
+
 
     DeviceTaskInfo taskInfo;
     QString taskErr;
@@ -72,10 +73,10 @@ void ModelChangeManager::NotifyLocalModelComplete()
     }
 
     m_curStep = Step_ExecuteProductSwitch;
-    emit SignalStepChanged(m_curStep);
+
     m_waitProductSwitch = true;
     // 下发当前工单产品名，通知UI执行确认换型逻辑
-    emit SignalExecuteProductModelSwitch(taskInfo.productionNum);
+    emit SignalExecuteProductModelSwitch(taskInfo.productionNum);   //
     // 暂停流程，等待UI回调结果
     return;
 }
@@ -98,7 +99,7 @@ void ModelChangeManager::SlotRecvProductSwitchResult(bool isOk, const QString &e
 
     // OK：配方切换完成，进入治具校验步骤
     m_curStep = Step_CheckFixtureUse;
-    emit SignalStepChanged(m_curStep);
+
     QString fixtureErr;
     bool fixtureOk = CheckFixtureNeed(fixtureErr);
     if (!fixtureOk)
@@ -111,7 +112,7 @@ void ModelChangeManager::SlotRecvProductSwitchResult(bool isOk, const QString &e
 
     // 设备切换成功，进入自检流程
     m_curStep = Step_DeviceSelfCheck;
-    emit SignalStepChanged(m_curStep);
+
     QString selfCheckErr;
     bool selfOk = RunDeviceSelfCheck(selfCheckErr);
     if (!selfOk)
@@ -125,7 +126,7 @@ void ModelChangeManager::SlotRecvProductSwitchResult(bool isOk, const QString &e
 
     // 全流程成功收尾
     m_curStep = Step_FinishModelChange;
-    emit SignalStepChanged(m_curStep);
+
     UploadCmdResult("ModelChangeComplete", true);
     UploadDeviceStatus("RUNNING");
     ReportModelResult(Result_Success, "一键换型全部流程执行完成");
@@ -204,7 +205,7 @@ void ModelChangeManager::SlotRecvDeviceRealStatus(const QString &status)
 
     // 状态校验通过，进入等待本地换型步骤
     m_curStep = Step_WaitModelComplete;
-    emit SignalStepChanged(m_curStep);
+
     m_waitLocalTimer.start();
 }
 
@@ -220,16 +221,25 @@ void ModelChangeManager::ProcessInstruction(const DeviceExecCommand &cmd)
     {
         m_pollTimer.stop();
         m_curStep = Step_CheckDeviceStatus;
-        emit SignalStepChanged(m_curStep);
+
+        //等待是否允许换型
+
+
 
         // 1. 上报指令接收成功
         UploadCmdResult("ModelChangePrepare", true);
 
         // 向外发送信号，请求外部传入实时设备状态
         m_waitingDevStatus = true;
-        emit SignalRequestDeviceStatus();
+
         return;
     }
+
+    else if(cmdText == "ModelChangeComplete")
+    {
+        NotifyLocalModelComplete();
+    }
+
 }
 
 void ModelChangeManager::ReportModelResult(ModelChangeResult res, const QString &extraMsg)
@@ -243,7 +253,6 @@ void ModelChangeManager::ReportModelResult(ModelChangeResult res, const QString 
 
 bool ModelChangeManager::PullDeviceInstruction(DeviceExecCommand &outCmd, QString &errMsg)
 {
-    // 新接口：QString GetDeviceExecCommands(..., DeviceExecCommand& outCmd)
     errMsg = m_ctrlApi->GetDeviceExecCommands(m_deviceCode, m_deviceIp, outCmd);
     return errMsg.isEmpty();
 }

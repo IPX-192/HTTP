@@ -51,6 +51,12 @@ FORMS += \
         ProductionTestManager.ui \
         mainwindow.ui
 
+INCLUDEPATH += $$PWD/./VisAppTool
+DEPENDPATH += $$PWD/./VisAppTool
+
+win32:CONFIG(release, debug|release): LIBS += -L$$PWD/./VisAppTool/ -lVisAppTool
+else:win32:CONFIG(debug, debug|release): LIBS += -L$$PWD/./VisAppTool/ -lVisAppToold
+
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin

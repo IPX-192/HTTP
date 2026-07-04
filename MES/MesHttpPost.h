@@ -292,7 +292,7 @@ protected:
     bool WaitRequestFinish(QNetworkReply* reply, int timeoutMs = MES_NET_REQUEST_TIMEOUT_MS);
     void SaveTestLog(const QByteArray& bytedata);
     QString EncodeWholePath(const QString& path);
-    void HandleRequestError(QNetworkReply* reply);
+    void HandleRequestError(QNetworkReply* reply, ReplyStatus reqType);
     void ClearRequestContext(QNetworkReply* reply);
 
 protected:

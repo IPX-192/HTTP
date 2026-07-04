@@ -68,13 +68,13 @@ enum CtrlReqType
 {
     ctrlNone = 0,
     ctrlDeviceSelfCheckStatus,        // 设备自检状态上报
-    ctrlDeviceSelfCheckResult,      // 设备自检最终结果上报
-    ctrlDeviceSelfCheckResultExt,   // 设备自检完整明细上报
-    ctrlDeviceAlarmEvent,           // 设备告警上报
-    ctrlDeviceStatus,              // 设备状态上传
-    ctrlGetDeviceExecCommands,     // 获取设备执行指令
-    ctrlGetDeviceTaskInfo,         // 获取当前生产任务
-    ctrlSaveDeviceCmdExecResult,   // 指令执行结果上报
+    ctrlDeviceSelfCheckResult,        // 设备自检最终结果上报
+    ctrlDeviceSelfCheckResultExt,     // 设备自检完整明细上报
+    ctrlDeviceAlarmEvent,             // 设备告警上报
+    ctrlDeviceStatus,                 // 设备状态上传
+    ctrlGetDeviceExecCommands,        // 获取设备执行指令
+    ctrlGetDeviceTaskInfo,            // 获取当前生产任务
+    ctrlSaveDeviceCmdExecResult,      // 指令执行结果上报
     ctrlSaveDeviceInstructionFeedback // 指令执行反馈上传
 };
 
@@ -134,10 +134,11 @@ protected:
 
     bool WaitRequestFinish(QNetworkReply* reply, int timeoutMs = CTRL_NET_REQUEST_TIMEOUT_MS);
     void ClearRequestContext(QNetworkReply* reply);
+    void HandleRequestError(QNetworkReply* reply, int reqType);
     void SaveCtrlLog(const QByteArray& data);
 
     // 报文解析统一函数,错误存入静态map
-    bool ParseCommonResponse(const QJsonObject& jsonObj);
+    bool ParseCommonResponse(const QJsonObject& jsonObj, int reqType);
     bool ParseExecCommandResp(const QJsonObject& jsonObj, DeviceExecCommand& outCmd);
     bool ParseTaskInfoResp(const QJsonObject& jsonObj, DeviceTaskInfo& outTask);
 

@@ -1,6 +1,6 @@
 #include <windows.h>
 
-IDI_ICON1	ICON	DISCARDABLE	"C:\\Users\\admin\\Desktop\\MES\\Tools.ico"
+IDI_ICON1	ICON	DISCARDABLE	"D:\\git\\HTTP\\MES\\Tools.ico"
 
 VS_VERSION_INFO VERSIONINFO
 	FILEVERSION 1,0,0,0

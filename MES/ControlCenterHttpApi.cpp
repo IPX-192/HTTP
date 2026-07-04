@@ -85,6 +85,17 @@ void ControlCenterHttpApi::ClearRequestContext(QNetworkReply *reply)
         m_reqMap.remove(reply);
 }
 
+void ControlCenterHttpApi::HandleRequestError(QNetworkReply *reply, int reqType)
+{
+    if (reply)
+    {
+        reply->abort();
+        ClearRequestContext(reply);
+        reply->deleteLater();
+    }
+    m_reqRunning[reqType] = false;
+}
+
 void ControlCenterHttpApi::SaveCtrlLog(const QByteArray &data)
 {
     QDateTime now = QDateTime::currentDateTime();
@@ -131,12 +142,13 @@ QString ControlCenterHttpApi::SendCtrlRequestImpl(int reqType, const QString &ap
 
     QString fullUrl = GetCtrlBaseUrl() + apiPath;
     QUrl url(fullUrl);
-    QNetworkRequest req(url);
+    QNetworkRequest req;
     req.setRawHeader("Content-Type", "application/json;charset=utf-8");
 
     QNetworkReply* reply = nullptr;
     QJsonDocument doc(body);
-    QByteArray postData = doc.toJson(QJsonDocument::Compact);
+    QByteArray postData;
+    QString queryString;
 
     if (isGet)
     {
@@ -146,13 +158,22 @@ QString ControlCenterHttpApi::SendCtrlRequestImpl(int reqType, const QString &ap
             query.addQueryItem(iter.key(), iter.value().toString());
         }
         url.setQuery(query);
+        queryString = query.toString();
         req.setUrl(url);
         reply = m_netMgr.get(req);
-        postData.clear();
     }
     else
     {
+        postData = doc.toJson(QJsonDocument::Compact);
+        req.setUrl(url);
         reply = m_netMgr.post(req, postData);
+    }
+
+    if (!reply)
+    {
+        outMsg = "创建网络请求失败";
+        HandleRequestError(reply, reqType);
+        return outMsg;
     }
 
     CtrlRequestContext ctx;
@@ -162,39 +183,47 @@ QString ControlCenterHttpApi::SendCtrlRequestImpl(int reqType, const QString &ap
     ctx.respData.clear();
     m_reqMap.insert(reply, ctx);
 
-    QString logText = QString("[%1] %2 \nBody: %3")
+    QString logText = QString("[%1] %2 \n%3")
             .arg(isGet ? "GET" : "POST")
             .arg(apiPath)
-            .arg(QString::fromUtf8(postData));
+            .arg(isGet ? "Query: " + queryString : "Body: " + QString::fromUtf8(postData));
     SaveCtrlLog(logText.toLocal8Bit());
 
     bool waitOk = WaitRequestFinish(reply, CTRL_NET_REQUEST_TIMEOUT_MS);
     if (!waitOk)
     {
         outMsg = "控制中心接口30s超时";
-        reply->abort();
-        reply->deleteLater();
-        ClearRequestContext(reply);
-        m_reqRunning[reqType] = false;
+        HandleRequestError(reply, reqType);
         return outMsg;
     }
 
+    if (!m_reqMap.contains(reply))
+    {
+        outMsg = "请求上下文丢失";
+        HandleRequestError(reply, reqType);
+        return outMsg;
+    }
     CtrlRequestContext finishCtx = m_reqMap.take(reply);
     QByteArray respBytes = finishCtx.respData;
 
-    int httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    int httpCode = finishCtx.reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     if (httpCode < 200 || httpCode >= 300)
     {
         outMsg = QString("HTTP异常，状态码：%1").arg(httpCode);
-        finishCtx.reply->deleteLater();
-        m_reqRunning[reqType] = false;
+        if (!respBytes.isEmpty())
+        {
+            QString errorText = QString::fromUtf8(respBytes);
+            if (errorText.length() > 200)
+                errorText = errorText.left(200) + "...";
+            outMsg += QString("，响应：%1").arg(errorText);
+        }
+        HandleRequestError(reply, reqType);
         return outMsg;
     }
     if (respBytes.isEmpty())
     {
         outMsg = "控制中心返回空数据";
-        finishCtx.reply->deleteLater();
-        m_reqRunning[reqType] = false;
+        HandleRequestError(reply, reqType);
         return outMsg;
     }
 
@@ -202,19 +231,23 @@ QString ControlCenterHttpApi::SendCtrlRequestImpl(int reqType, const QString &ap
     QJsonDocument jsonDoc = QJsonDocument::fromJson(respBytes, &jsonErr);
     if (jsonErr.error != QJsonParseError::NoError)
     {
-        outMsg = QString("JSON解析失败：%1").arg(jsonErr.errorString());
-        finishCtx.reply->deleteLater();
-        m_reqRunning[reqType] = false;
+        QString respText = QString::fromUtf8(respBytes);
+        if (respText.length() > 200)
+            respText = respText.left(200) + "...";
+        outMsg = QString("JSON解析失败：%1，原始响应：%2")
+                .arg(jsonErr.errorString())
+                .arg(respText);
+        HandleRequestError(reply, reqType);
         return outMsg;
     }
     QJsonObject jsonObj = jsonDoc.object();
 
-    bool parseOk = ParseCommonResponse(jsonObj);
+    //先统一进行全局解析
+    bool parseOk = ParseCommonResponse(jsonObj, reqType);
     if (!parseOk)
     {
         outMsg = m_parseErrMap.value(reqType);
-        finishCtx.reply->deleteLater();
-        m_reqRunning[reqType] = false;
+        HandleRequestError(reply, reqType);
         return outMsg;
     }
 
@@ -245,7 +278,7 @@ QString ControlCenterHttpApi::SendCtrlRequestImpl(int reqType, const QString &ap
         parseOk = ParseTaskInfoResp(jsonObj, ref);
         break;
     }
-    // 其余接口无输出结构体，无需解析
+        // 其余接口无输出结构体，无需解析
     case ctrlDeviceSelfCheckStatus:
     case ctrlDeviceSelfCheckResult:
     case ctrlDeviceSelfCheckResultExt:
@@ -265,19 +298,20 @@ QString ControlCenterHttpApi::SendCtrlRequestImpl(int reqType, const QString &ap
         outMsg = m_parseErrMap.value(reqType);
     }
 
+    // 正常成功统一释放
     finishCtx.reply->deleteLater();
     m_reqRunning[reqType] = false;
     return outMsg;
 }
 
 // 公共校验：失败错误存入静态map
-bool ControlCenterHttpApi::ParseCommonResponse(const QJsonObject &jsonObj)
+bool ControlCenterHttpApi::ParseCommonResponse(const QJsonObject &jsonObj, int reqType)
 {
     QString status = jsonObj["status"].toString();
     if (status.compare("PASS", Qt::CaseInsensitive) != 0 && status.compare("success", Qt::CaseInsensitive) != 0)
     {
         QString msg = jsonObj["message"].toString("未知错误");
-        m_parseErrMap[jsonObj["reqType"].toInt()] = QString("接口返回失败：%1").arg(msg);
+        m_parseErrMap[reqType] = QString("接口返回失败：%1").arg(msg);
         return false;
     }
     return true;
@@ -287,7 +321,24 @@ bool ControlCenterHttpApi::ParseExecCommandResp(const QJsonObject &jsonObj, Devi
 {
     outCmd = DeviceExecCommand();
     QJsonObject content = jsonObj["content"].toObject();
-    outCmd.command = content["command"].toString("NONE");
+    if (content.isEmpty())
+    {
+        m_parseErrMap[ctrlGetDeviceExecCommands] = "指令查询返回空content";
+        return false;
+    }
+    if (!content.contains("command"))
+    {
+        m_parseErrMap[ctrlGetDeviceExecCommands] = "指令返回content缺少command字段";
+        return false;
+    }
+    QString cmdVal = content["command"].toString().trimmed();
+    QStringList validCmd = {"NONE", "ModelChangePrepare", "ModelChangeComplete"};
+    if (!validCmd.contains(cmdVal))
+    {
+        m_parseErrMap[ctrlGetDeviceExecCommands] = QString("非法指令：%1，仅支持NONE/ModelChangePrepare/ModelChangeComplete").arg(cmdVal);
+        return false;
+    }
+    outCmd.command = cmdVal;
     return true;
 }
 
