@@ -1,0 +1,10 @@
+*.txt
+MES/.svn/wc.db-journal
+/MES/.vs
+/MES/.svn
+*.tlog
+*.obj
+/MES/debug
+/MES/release
+*.pdb
+*.dat
