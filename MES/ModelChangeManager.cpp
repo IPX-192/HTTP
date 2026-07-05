@@ -60,7 +60,6 @@ void ModelChangeManager::NotifyLocalModelComplete()
     // 本地换型完成，流转下一步：获取生产任务
     m_curStep = Step_GetTaskInfo;
 
-
     DeviceTaskInfo taskInfo;
     QString taskErr;
     bool taskOk = PullCurrentTask(taskInfo, taskErr);
@@ -73,11 +72,22 @@ void ModelChangeManager::NotifyLocalModelComplete()
     }
 
     m_curStep = Step_ExecuteProductSwitch;
-
     m_waitProductSwitch = true;
-    // 下发当前工单产品名，通知UI执行确认换型逻辑
-    emit SignalExecuteProductModelSwitch(taskInfo.productionNum);   //
-    // 暂停流程，等待UI回调结果
+
+
+    // 参数：设备编码、产品编号，给到UI模块
+    int busRet = VisAppBus::sendEvent_Topic(BUS_TOPIC_MODEL_CHANGE, EVENT_REQ_PROD_SWITCH,
+                                            m_deviceCode, taskInfo.productionNum);
+    if (busRet != 0)
+    {
+        QString err = QString("下发配方切换总线失败，错误码：%1").arg(busRet);
+        UploadAlarm(err);
+        UploadCmdResult("ModelChangeComplete", false, err);
+        ReportModelResult(Result_Fail_MissingFile, err);
+        return;
+    }
+    // 启动超时计时，防止UI无回复卡死
+    m_waitProdSwitchBusTimer.start();
     return;
 }
 
@@ -224,7 +234,7 @@ void ModelChangeManager::ProcessInstruction(const DeviceExecCommand &cmd)
 
         //等待是否允许换型
 
-
+        VisAppBus::subscibeEvent_Topic("ModelChangeBus", "RspDevStatus", this);
 
         // 1. 上报指令接收成功
         UploadCmdResult("ModelChangePrepare", true);
