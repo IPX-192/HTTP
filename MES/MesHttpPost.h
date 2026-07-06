@@ -121,6 +121,18 @@ struct StationHeartBeat {
     QDateTime beatTime;
 };
 
+struct BindFixtureItem
+{
+    QString number;    // 探针条码
+    QString channel;    //通道
+};
+
+struct FixtureConsumeItem
+{
+    QString number;    // 探针条码
+    int consumption;   // 消耗值，0后端自动置1
+};
+
 // 治具寿命消耗单条
 struct FixtureLifeItem
 {
@@ -237,10 +249,10 @@ public:
     QString QueryDeviceProcessInfo(const QString& deviceIp, const QString& workOrderId, QList<DeviceProcessItem>& outDeviceList);
     QString StationHeartbeat();
     QString ValidateDeviceUseFixture(bool& outNeedFixture);
-    QString BindFixtureChannel(const QString& fixtureSn, const QString& channel, FixtureConsumeResult& outResult);
+    QString BindFixtureChannel(const QList<BindFixtureItem>& bindList, FixtureConsumeResult& outResult);
 
     // 自动生产流程
-    QString ConsumeFixtureLife(const QString& fixtureSn, int consumeNum, FixtureConsumeResult& outResult);
+    QString ConsumeFixtureLife(const QList<FixtureConsumeItem>& consumeList, FixtureConsumeResult& outResult);
     QString ValidateStandardElementNumber(const QString& sn,bool& outStandard);
     QString ValidateNumber(const QString& sn,bool& outValidate);
     QString SaveProcessOpResult(const QString& sn, int opResult, const QJsonArray& detailArr, QString& outMainId);
@@ -260,7 +272,7 @@ public:
     bool ReplyJsonFromQueryDeviceProcessInfo(QJsonObject& jsonObject, QList<DeviceProcessItem>& outDeviceList);
     bool ReplyJsonFromStationHeartbeat(QJsonObject& jsonObject);
     bool ReplyJsonFromValidateDeviceUseFixture(QJsonObject& jsonObject, bool& outNeedFixture);
-    bool ReplyJsonFromBindFixtureChannel(QJsonObject& jsonObject, FixtureConsumeResult& outResult);
+    bool ReplyJsonFromBindFixtureChannel(QJsonObject & jsonObject, FixtureConsumeResult& outResult);
     bool ReplyJsonFromConsumeFixtureLife(QJsonObject& jsonObject, FixtureConsumeResult& outResult);       //注意：这里文档上出参"residuleLife"，应为"residueLife"
     bool ReplyJsonFromValidateStandardElementNumber(QJsonObject& jsonObject,bool& outStandard);
     bool ReplyJsonFromUploadSingle(QJsonObject& jsonObject, UploadFileResp& outUploadResp);

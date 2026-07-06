@@ -41,14 +41,15 @@ int main(int argc, char *argv[])
 
     MainWindow w;
 
+
     ModelChangeManager model;
     CalibTcpTrans::Instance(&w);
     MesHttpPost::Instance(&w);
     w.show();
-    ProductionTestManager p;
+     ProductionTestManager p;
     QString str;
     w.LoadAllWorkOrderData(str);
-    QObject::connect(&w,&MainWindow::SignalCheckFixtureNeedAndSelfCheck,&model,&ModelChangeManager::SlotCheckFixtureNeedAndSelfCheck);
+
 
     a.exec();
     return CloseHandle(m_hMutex);

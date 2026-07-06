@@ -55,8 +55,13 @@ QString ProductionTestManager::ConsumeFixtureLife(StationId station, const QStri
         return "";
     }
 
+    QList<FixtureConsumeItem> list;
+    FixtureConsumeItem item;
+    item.number = fixtureSn;
+    item.consumption = consumeNum;
+    list.append(item);
     //接口测试：治具消耗接口
-    QString retErr = MesHttpPost::Instance()->ConsumeFixtureLife(fixtureSn, consumeNum, outResult);
+    QString retErr = MesHttpPost::Instance()->ConsumeFixtureLife(list, outResult);
     if (!retErr.isEmpty())
     {
         EmitLog(station, "ConsumeFixtureLife", reqJson, "接口失败:" + retErr, false);

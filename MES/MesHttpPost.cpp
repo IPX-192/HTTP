@@ -662,29 +662,35 @@ QString MesHttpPost::ValidateDeviceUseFixture(bool& outNeedFixture)
     return SendMesPostRequest(replyValidateDeviceUseFixture, "validateDeviceUseFixture", body, outNeedFixture);
 }
 
-QString MesHttpPost::BindFixtureChannel(const QString& fixtureSn, const QString& channel, FixtureConsumeResult& outResult)
+QString MesHttpPost::BindFixtureChannel( const QList<BindFixtureItem>& bindList,FixtureConsumeResult& outResult)
 {
     QJsonObject body;
     body["processKey"] = m_processKey;
-    QJsonObject listItem;
-    listItem["number"] = fixtureSn;
-    listItem["channel"] = channel;
-    QJsonArray arr;
-    arr.append(listItem);
-    body["list"] = arr;
+    QJsonArray listArr;
+    for (auto &item : bindList)
+    {
+        QJsonObject obj;
+        obj["number"] = item.number;
+        obj["channel"] = item.channel;
+        listArr.append(obj);
+    }
+    body["list"] = listArr;
     return SendMesPostRequest(replyBindFixtureChannel, "bindFixtureChannel", body, outResult);
 }
 
-QString MesHttpPost::ConsumeFixtureLife(const QString& fixtureSn, int consumeNum, FixtureConsumeResult& outResult)
+QString MesHttpPost::ConsumeFixtureLife(const QList<FixtureConsumeItem>& consumeList, FixtureConsumeResult& outResult)
 {
     QJsonObject body;
-    QJsonObject listItem;
-    listItem["number"] = fixtureSn;
-    listItem["consumption"] = consumeNum;
     body["processKey"] = m_processKey;
-    QJsonArray arr;
-    arr.append(listItem);
-    body["list"] = arr;
+    QJsonArray listArr;
+    for (auto &item : consumeList)
+    {
+        QJsonObject obj;
+        obj["number"] = item.number;
+        obj["consumption"] = item.consumption;
+        listArr.append(obj);
+    }
+    body["list"] = listArr;
     return SendMesPostRequest(replyConsumeFixtureLife, "consumeFixtureLife", body, outResult);
 }
 
@@ -1094,12 +1100,13 @@ bool MesHttpPost::ReplyJsonFromValidateDeviceUseFixture(QJsonObject & jsonObject
 
 bool MesHttpPost::ReplyJsonFromBindFixtureChannel(QJsonObject & jsonObject, FixtureConsumeResult& outResult)
 {
+    // 重置结构体默认值
     outResult = FixtureConsumeResult();
-    QString status = jsonObject["status"].toString();
     QString logtxt = "ReplyJsonFromBindFixtureChannel:\n" + QJsonDocument(jsonObject).toJson();
     SaveTestLog(logtxt.toLocal8Bit());
 
-    if (status != "success" && status != "PASS")
+    QString status = jsonObject["status"].toString();
+    if (status.compare("success", Qt::CaseInsensitive) != 0 && status.compare("PASS", Qt::CaseInsensitive) != 0)
     {
         m_parseErrMap[QString::number((int)replyBindFixtureChannel)] = jsonObject["message"].toString();
         return false;
@@ -1114,15 +1121,19 @@ bool MesHttpPost::ReplyJsonFromBindFixtureChannel(QJsonObject & jsonObject, Fixt
     QJsonArray contentArr = contentVal.toArray();
     for (auto itemVal : contentArr)
     {
-        if (!itemVal.isObject()) continue;
+        if (!itemVal.isObject())
+            continue;
         QJsonObject itemObj = itemVal.toObject();
-        FixtureLifeItem item;
-        item.number = itemObj["number"].toString();
-        item.totalLife = itemObj["totalLife"].toDouble();
-        item.residueLife = itemObj["residueLife"].toDouble();
-        item.consumption = itemObj["consumption"].toInt();
-        outResult.fixtureList.append(item);
+        FixtureLifeItem lifeItem;
+        lifeItem.number = itemObj["number"].toString();
+        lifeItem.totalLife = itemObj["totalLife"].toDouble();
+        lifeItem.residueLife = itemObj["residueLife"].toDouble();
+        // 文档未标注consumption，若无则默认0
+        lifeItem.consumption = itemObj.contains("consumption") ? itemObj["consumption"].toInt() : 0;
+        outResult.fixtureList.append(lifeItem);
     }
+    outResult.warnFlag = false;
+    outResult.warnMessage = "";
     return true;
 }
 
