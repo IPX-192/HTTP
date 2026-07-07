@@ -3,17 +3,19 @@
 #include <QCoreApplication>
 #include "VisAppBus.h"
 
-// 业务总线全局常量
-
-const QByteArray EVENT_REQ_PROD_SWITCH = "ReqProductModelSwitch";
-const QByteArray EVENT_MODEL_CHANGE_VALID = "ModelChangeValid";
+// ========== 业务总线全局常量 ==========
+const QByteArray EVENT_MODEL_CHANGE_VALID     = "ModelChangeValid";
+const QByteArray EVENT_REQ_PROD_SWITCH            = "ReqProductModelSwitch";
+const QByteArray EVENT_GET_FIXTURE_CHANNEL     = "GetFixtureChannelList";
+const QByteArray EVENT_GET_SELF_CHECK                = "GetSelfCheckResult";
 
 ModelChangeManager::ModelChangeManager(QObject *parent) : QObject(parent)
 {
     m_ctrlApi = ControlCenterHttpApi::Instance();
     m_mesApi = MesHttpPost::Instance();
-    m_curStep = Step_Idle;
-
+    m_lastError.clear();
+    m_waitCompleteFlag = false;
+    m_modelStatus = Status_None;
     // 10s轮询指令定时器
     m_pollTimer.setInterval(POLL_INTERVAL);
     connect(&m_pollTimer, &QTimer::timeout, this, &ModelChangeManager::SlotPollInstruction);
@@ -26,28 +28,25 @@ ModelChangeManager::~ModelChangeManager()
 
 void ModelChangeManager::StartModelChange(const QString &deviceCode, const QString &deviceIp)
 {
-    if (m_curStep != Step_Idle)
+    if (m_pollTimer.isActive())
     {
         m_lastError = "换型流程正在运行，禁止重复启动";
         emit SignalModelChangeFinished(Result_Fail_CannotChange, m_lastError);
         return;
     }
+    m_modelStatus = Status_None;
     m_deviceCode = deviceCode;
     m_deviceIp = deviceIp;
-    m_curStep = Step_GetInstruction;
     m_lastError.clear();
+    m_waitCompleteFlag = false;
     m_pollTimer.start();
 }
 
 void ModelChangeManager::StopModelChange()
 {
+    m_modelStatus = Status_None;
     m_pollTimer.stop();
-    m_curStep = Step_Idle;
-}
-
-ModelChangeStep ModelChangeManager::GetCurrentStep() const
-{
-    return m_curStep;
+    m_waitCompleteFlag = false;
 }
 
 QString ModelChangeManager::GetLastErrorMsg() const
@@ -57,9 +56,6 @@ QString ModelChangeManager::GetLastErrorMsg() const
 
 void ModelChangeManager::SlotPollInstruction()
 {
-    if (m_curStep != Step_GetInstruction)
-        return;
-
     DeviceExecCommand cmd;
     QString errMsg;
     bool ok = PullDeviceInstruction(cmd, errMsg);
@@ -68,17 +64,30 @@ void ModelChangeManager::SlotPollInstruction()
         m_lastError = errMsg;
         return;
     }
-    ProcessInstruction(cmd);
+
+    const QString& cmdText = cmd.command.trimmed();
+
+    if (cmdText == "NONE")
+    {
+        m_modelStatus = Status_None;
+    }
+    else if (cmdText == "ModelChangePrepare")
+    {
+        m_modelStatus = Status_Prepare;
+    }
+    else if (cmdText == "ModelChangeComplete")
+    {
+        m_modelStatus = Status_Complete;
+    }
+    ProcessInstruction();
 }
 
 // 收到ModelChangeComplete指令后进入任务获取流程
 void ModelChangeManager::NotifyLocalModelComplete()
 {
-    if (m_curStep != Step_WaitModelComplete)
-        return;
+    m_waitCompleteFlag = false;
 
     // 1：获取生产任务
-    m_curStep = Step_GetTaskInfo;
     DeviceTaskInfo taskInfo;
     QString taskErr;
     bool taskOk = PullCurrentTask(taskInfo, taskErr);
@@ -89,29 +98,43 @@ void ModelChangeManager::NotifyLocalModelComplete()
         ReportModelResult(Result_Fail_NoTask, taskErr);
         return;
     }
-
+    QString err;
+    // 1. 请求配方切换
     QString changeRes;
-    QList<QPair<QString,QString>> fixtureList;
-    QString selfRes;
-
-    // 2：下发总线请求配方切换
-    m_curStep = Step_ExecuteProductSwitch;
-
-    int busRet = VisAppBus::sendEvent(EVENT_REQ_PROD_SWITCH, taskInfo.productionNum,changeRes,fixtureList,selfRes);
-    if (busRet != 0)
+    int busRet1 = VisAppBus::sendEvent(EVENT_REQ_PROD_SWITCH, taskInfo.productionNum, changeRes);
+    if (busRet1 != 0)
     {
-        QString err = QString("下发配方切换总线失败，错误码：%1").arg(busRet);
+        QString err = QString("下发【配方切换】总线失败，错误码：%1").arg(busRet1);
         UploadAlarm(err);
         //UploadCmdResult("ModelChangeComplete", false, err);
         ReportModelResult(Result_Fail_MissingFile, err);
         return;
     }
-
-    QList<BindFixtureItem> bindList;
-    if(fixtureList.size())
+    // 配方校验
+    if (!HandleProdSwitch(changeRes, err))
     {
-        bindList.reserve(fixtureList.size());
-        for (const auto& pair : fixtureList)
+        UploadAlarm(err);
+        UploadCmdResult("ModelChangeComplete", false, err);
+        ReportModelResult(Result_Fail_MissingFile, err);
+        return;
+    }
+
+    // 2：请求治具通道数组
+    QList<QPair<QString,QString>> fixturePairList;
+    int busRet2 = VisAppBus::sendEvent(EVENT_GET_FIXTURE_CHANNEL, taskInfo.productionNum, fixturePairList);
+    if (busRet2 != 0)
+    {
+        QString err = QString("下发【治具通道查询】总线失败，错误码：%1").arg(busRet2);
+        UploadAlarm(err);
+        //UploadCmdResult("ModelChangeComplete", false, err);
+        ReportModelResult(Result_FixtureCheck_Fail, err);
+        return;
+    }
+    QList<BindFixtureItem> bindList;
+    if(!fixturePairList.isEmpty())
+    {
+        bindList.reserve(fixturePairList.size());
+        for (const auto& pair : fixturePairList)
         {
             BindFixtureItem item;
             item.number = pair.first;
@@ -119,36 +142,66 @@ void ModelChangeManager::NotifyLocalModelComplete()
             bindList.append(item);
         }
     }
+    // 治具校验
+    if (!HandleFixtureCheck(bindList, err))
+    {
+        UploadAlarm(err);
+        UploadCmdResult("ModelChangeComplete", false, err);
+        ReportModelResult(Result_FixtureCheck_Fail, err);
+    }
 
-    ProdSwitchBusMsg(changeRes,bindList,selfRes);
+    //设备自检前上报设备切换成功
+    UploadCmdResult("ModelChangeComplete", true);
+
+    // 3：请求自检状态
+    QString selfRes;
+    int busRet3 = VisAppBus::sendEvent(EVENT_GET_SELF_CHECK, taskInfo.productionNum, selfRes);
+    if (busRet3 != 0)
+    {
+        QString err = QString("下发【自检结果查询】总线失败，错误码：%1").arg(busRet3);
+        UploadAlarm(err);
+        //UploadCmdResult("ModelChangeComplete", false, err);
+        ReportModelResult(Result_SelfCheck_Fail, err);
+        return;
+    }
+    //  自检校验
+    if (!HandleSelfCheck(selfRes, err))
+    {
+        UploadAlarm(err);
+        UploadDeviceStatus("FAULT");
+        UploadCmdResult("ModelChangeComplete", false, err);
+        ReportModelResult(Result_SelfCheck_Fail, err);
+        return;
+    }
+
+    // 全部校验通过
+    UploadDeviceStatus("RUNNING");
+    ReportModelResult(Result_Success, "一键换型全部流程执行完成");
 }
 
-// 指令处理主逻辑
-void ModelChangeManager::ProcessInstruction(const DeviceExecCommand &cmd)
+void ModelChangeManager::ProcessInstruction()
 {
-    const QString& cmdText = cmd.command.trimmed();
-    // NONE：无指令，持续轮询
-    if (cmdText == "NONE" || cmdText.isEmpty())
-        return;
-
-    // 收到ModelChangePrepare：总线校验设备是否允许换型
-    if (cmdText == "ModelChangePrepare")
+    if(m_modelStatus == Status_None)
     {
-        m_pollTimer.stop();
-        m_curStep = Step_CheckDeviceStatus;
+        QString errMsg = "无任务消息，退出等待换型完成指令";
+        UploadAlarm(errMsg);
+        UploadCmdResult("ModelChangePrepare", false, errMsg);
+        m_waitCompleteFlag = false;
+        return;
+    }
+
+    else if (m_modelStatus == Status_Prepare )
+    {
         bool canChange = false;
         int busRet = VisAppBus::sendEvent(EVENT_MODEL_CHANGE_VALID, canChange);
-
-        // 总线发送失败
         if (busRet != 0)
         {
             QString errMsg = QString("下发设备可换型校验总线失败，错误码：%1").arg(busRet);
-            UploadCmdResult("ModelChangePrepare", false, errMsg);
+            //UploadCmdResult("ModelChangePrepare", false, errMsg);
             ReportModelResult(Result_Fail_CannotChange, errMsg);
             return;
         }
-
-        // 上报Prepare执行结果
+        //上报是否可以执行换型
         UploadCmdResult("ModelChangePrepare", canChange);
         if (!canChange)
         {
@@ -156,83 +209,63 @@ void ModelChangeManager::ProcessInstruction(const DeviceExecCommand &cmd)
             ReportModelResult(Result_Fail_CannotChange, errMsg);
             return;
         }
-
-        // 校验通过，进入无限等待ModelChangeComplete，重启10s轮询
-        m_curStep = Step_WaitModelComplete;
-        m_pollTimer.start();
+        // 校验通过，标记等待Complete
+        m_waitCompleteFlag = true;
         return;
     }
 
-    // 收到ModelChangeComplete：停止轮询，进入任务&配方切换流程
-    else if (cmdText == "ModelChangeComplete")
+    // 等待阶段收到Complete，执行业务
+    if(m_waitCompleteFlag && m_modelStatus == Status_Complete )
     {
-        m_pollTimer.stop();
         NotifyLocalModelComplete();
-        return;
     }
 }
 
 // 统一流程收尾，重置状态并抛出结束信号
 void ModelChangeManager::ReportModelResult(ModelChangeResult res, const QString &extraMsg)
 {
-    m_pollTimer.stop();
-    m_curStep = Step_Idle;
+    m_modelStatus = Status_None;
+    m_waitCompleteFlag = false;
     m_lastError = extraMsg;
     emit SignalModelChangeFinished(res, extraMsg);
 }
 
-void ModelChangeManager::ProdSwitchBusMsg(QString changeRes, QList<BindFixtureItem>& fixtureList, QString selfRes)
+// 1. 处理配方切换
+bool ModelChangeManager::HandleProdSwitch(const QString& changeRes, QString& outErr)
 {
-    if (m_curStep != Step_ExecuteProductSwitch)
-        return;
-
-    // 配方切换NG（缺少文件）
     if (changeRes.compare("NG", Qt::CaseInsensitive) == 0)
     {
-        QString errMsg = "配方切换失败，缺失生产程序文件";
-        UploadAlarm(errMsg);
-        UploadCmdResult("ModelChangeComplete", false, errMsg);
-        ReportModelResult(Result_Fail_MissingFile, errMsg);
-        return;
+        outErr = "配方切换失败，缺失生产程序文件";
+        return false;
     }
+    return true;
+}
 
-    // 配方OK，进入治具校验
-    m_curStep = Step_CheckFixtureUse;
-    QString fixtureErr;
-    bool fixtureOk = true;
-    if (fixtureList.size())
+// 2. 处理治具校验
+bool ModelChangeManager::HandleFixtureCheck(QList<BindFixtureItem>& fixtureList, QString& outErr)
+{
+    if (fixtureList.isEmpty())
+        return true;
+
+    QString errMsg;
+    bool ok = CheckFixtureNeed(fixtureList, errMsg);
+    if (!ok)
     {
-        fixtureOk = CheckFixtureNeed(fixtureList,fixtureErr);
-        if (!fixtureOk)
-        {
-            UploadAlarm("治具校验失败：" + fixtureErr);
-            UploadCmdResult("ModelChangeComplete", false, fixtureErr);
-            ReportModelResult(Result_FixtureCheck_Fail, fixtureErr);
-            return;
-        }
+        outErr = "治具校验失败：" + errMsg;
+        return false;
     }
+    return true;
+}
 
-    // 治具校验通过，执行设备自检
-    m_curStep = Step_DeviceSelfCheck;
-    QString selfCheckErr;
-    bool selfOk = RunDeviceSelfCheck(selfCheckErr);
-
-    // 自检NG
-    if (!selfOk || selfRes.compare("NG", Qt::CaseInsensitive) == 0)
+// 3. 处理自检结果
+bool ModelChangeManager::HandleSelfCheck(const QString& selfRes, QString& outErr)
+{
+    if (selfRes.compare("NG", Qt::CaseInsensitive) == 0)
     {
-        QString errMsg = "设备自检未通过：" + selfCheckErr;
-        UploadAlarm(errMsg);
-        UploadDeviceStatus("FAULT");
-        UploadCmdResult("ModelChangeComplete", false, errMsg);
-        ReportModelResult(Result_SelfCheck_Fail, errMsg);
-        return;
+        outErr = "设备自检未通过";
+        return false;
     }
-
-    // 全流程成功收尾
-    m_curStep = Step_FinishModelChange;
-    UploadCmdResult("ModelChangeComplete", true);
-    UploadDeviceStatus("RUNNING");
-    ReportModelResult(Result_Success, "一键换型全部流程执行完成");
+    return true;
 }
 
 // 拉取控制中心下发指令
@@ -250,7 +283,7 @@ bool ModelChangeManager::PullCurrentTask(DeviceTaskInfo &outTask, QString &errMs
 }
 
 // MES治具校验逻辑
-bool ModelChangeManager::CheckFixtureNeed(QList<BindFixtureItem>&list, QString& errMsg)
+bool ModelChangeManager::CheckFixtureNeed(QList<BindFixtureItem>&list, QString &errMsg)
 {
     QString msg;
     bool needFixture = false;
@@ -264,36 +297,12 @@ bool ModelChangeManager::CheckFixtureNeed(QList<BindFixtureItem>&list, QString& 
     if (needFixture)
     {
         FixtureConsumeResult dummyResult;
-        //传入条码和通道
         msg = m_mesApi->BindFixtureChannel(list, dummyResult);
         if (!msg.isEmpty())
         {
             errMsg = "治具通道绑定校验失败：" + msg;
             return false;
         }
-    }
-    return true;
-}
-
-// 执行设备自检并上报自检结果
-bool ModelChangeManager::RunDeviceSelfCheck(QString &errMsg)
-{
-    QString selfResult;
-    QJsonArray detailItems;
-    emit SignalRequestDeviceSelfCheck(selfResult, detailItems);
-
-    if (selfResult.compare("NG", Qt::CaseInsensitive) == 0)
-    {
-        errMsg = "硬件自检未通过";
-        return false;
-    }
-
-    QString uploadErr;
-    uploadErr = m_ctrlApi->UploadDeviceSelfCheckResultExt(m_deviceCode, m_deviceIp, "", selfResult, detailItems);
-    if (!uploadErr.isEmpty())
-    {
-        errMsg = "自检结果上报接口异常：" + uploadErr;
-        return false;
     }
     return true;
 }

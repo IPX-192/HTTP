@@ -6,24 +6,11 @@
 #include <QString>
 #include <QDateTime>
 #include <QJsonArray>
+#include <QList>
 #include "ControlCenterHttpApi.h"
 #include "MesHttpPost.h"
 
-// 换型步骤状态机（严格匹配流程图）
-enum ModelChangeStep
-{
-    Step_Idle,                  // 空闲
-    Step_GetInstruction,        // 10s轮询拉取指令
-    Step_CheckDeviceStatus,     // 总线校验设备是否允许换型
-    Step_WaitModelComplete,     // 等待下发ModelChangeComplete指令（无超时）
-    Step_GetTaskInfo,           // 获取生产任务
-    Step_ExecuteProductSwitch,  // 下发总线执行配方切换
-    Step_CheckFixtureUse,       // MES治具校验
-    Step_DeviceSelfCheck,       // 设备自检
-    Step_FinishModelChange      // 流程结束
-};
-
-// 换型结果枚举
+// 换型最终结果枚举
 enum ModelChangeResult
 {
     Result_Success,
@@ -34,9 +21,16 @@ enum ModelChangeResult
     Result_SelfCheck_Fail       // 自检NG
 };
 
+// 流程状态枚举
+enum ModelStatus
+{
+    Status_None,        // 空闲无流程
+    Status_Prepare,     // 收到ModelChangePrepare，等待Complete指令
+    Status_Complete     // 收到ModelChangeComplete，执行业务流程
+};
+
 // 常量定义
 const int POLL_INTERVAL = 10000;        // 10s轮询指令
-const int BUS_WAIT_TIMEOUT = 5000;      // 总线应答超时5s
 
 class ModelChangeManager : public QObject
 {
@@ -45,42 +39,31 @@ public:
     explicit ModelChangeManager(QObject *parent = nullptr);
     ~ModelChangeManager();
 
-    // 启动换型流程
     void StartModelChange(const QString& deviceCode, const QString& deviceIp);
-    // 强制终止流程
     void StopModelChange();
-
-    // 对外查询
-    ModelChangeStep GetCurrentStep() const;
     QString GetLastErrorMsg() const;
 
 signals:
-    // 流程最终结束回调
     void SignalModelChangeFinished(ModelChangeResult result, const QString& msg);
-    // 推送告警
     void SignalAlarmTrigger(const QString& alarmInfo);
-    // 请求硬件自检，外部回填结果
-    void SignalRequestDeviceSelfCheck(QString& outResult, QJsonArray& outDetailItems);
 
 private slots:
-    void SlotPollInstruction();                                   // 10s轮询指令
+    void SlotPollInstruction();
 
 private:
-    // 主流程处理
-    void ProcessInstruction(const DeviceExecCommand& cmd);
-    void NotifyLocalModelComplete();                    // 收到ModelChangeComplete进入任务流程
-    void ReportModelResult(ModelChangeResult res, const QString& extraMsg = ""); // 统一收尾上报
+    void ProcessInstruction();
+    void NotifyLocalModelComplete();
+    void ReportModelResult(ModelChangeResult res, const QString& extraMsg);
 
-    void ProdSwitchBusMsg(QString changeRes,  QList<BindFixtureItem>& fixtureList, QString selfRes); // 总线接收配方切换结果
+    bool HandleProdSwitch(const QString& changeRes, QString& outErr);
+    bool HandleFixtureCheck(QList<BindFixtureItem>& fixtureList, QString& outErr);
+    bool HandleSelfCheck(const QString& selfRes, QString& outErr);
 
-
-    // MES/控制中心接口封装
     bool PullDeviceInstruction(DeviceExecCommand& outCmd, QString& errMsg);
     bool PullCurrentTask(DeviceTaskInfo& outTask, QString& errMsg);
-    bool CheckFixtureNeed( QList<BindFixtureItem>&list, QString& errMsg);
-    bool RunDeviceSelfCheck(QString& errMsg);
+    bool CheckFixtureNeed(QList<BindFixtureItem>& list, QString& errMsg);
 
-    // 上报工具函数
+    //上报接口
     void UploadCmdResult(const QString& cmd, bool isSuccess, const QString& msg = "");
     void UploadAlarm(const QString& alarmText);
     void UploadDeviceStatus(const QString& status);
@@ -88,14 +71,12 @@ private:
 private:
     ControlCenterHttpApi* m_ctrlApi;
     MesHttpPost* m_mesApi;
-
-    QTimer m_pollTimer;                 // 10s指令轮询定时器
-
+    QTimer m_pollTimer;
     QString m_deviceCode;
     QString m_deviceIp;
-    ModelChangeStep m_curStep;
     QString m_lastError;
-
+    bool m_waitCompleteFlag;
+    ModelStatus m_modelStatus;
 };
 
 #endif // MODELCHANGEMANAGER_H
