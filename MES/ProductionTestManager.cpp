@@ -20,9 +20,6 @@ ProductionTestManager::ProductionTestManager(QObject *parent)
     m_station2_WorkOrderId.clear();
     m_station2_ProcessId.clear();
 
-    QString str1;
-    QString str2;
-    RunFullAutoProduction(str1,true,str2);
 }
 
 // 根据工位获取独立processKey
@@ -207,8 +204,11 @@ QString ProductionTestManager::UploadSingle(StationId station, const QString& lo
     file.close();
 
     //组装请求头
-
     GatewayUploadHeader header;
+    header.user = "admin";
+    header.userName = QString::fromUtf8("\xe7\xae\xa1\xe7\x90\x86\xe5\x91\x98");
+    header.appCode = "MES_APP";
+    header.appSecretKey = "MES_SECRET_2026";
     QString retErr = MesHttpPost::Instance()->UploadSingle(header,fileName, fileBin, filePid, nsId, outUploadResp);
     if (!retErr.isEmpty())
     {

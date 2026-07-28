@@ -42,50 +42,6 @@ MainWindow::MainWindow(QWidget *parent) :
     m_heartTimer.setInterval(HEARTBEAT_INTERVAL);
     connect(&m_heartTimer, &QTimer::timeout, this, &MainWindow::SlotPostHeartBeatTimeout);
 
-    // ===================== 模拟假测试数据 =====================
-
-    PdLineList fakeLine;
-    fakeLine.id = "LINE_001";
-    fakeLine.name = "一号产线";
-
-    PdList fakeProduct;
-    fakeProduct.id = "PROD_001";
-    fakeProduct.name = "产品A-型号001";
-
-    // 工单1
-    WorkOrder wo1;
-    wo1.workOrderId = "WO20260702001";
-    wo1.name = "20260702-A批次工单";
-    // 工单1绑定两道工序
-    WorkProcess proc1;
-    proc1.processId = "PROC_001";
-    proc1.name = "贴片工序";
-    WorkProcess proc2;
-    proc2.processId = "PROC_002";
-    proc2.name = "检测工序";
-    wo1.vecProcessId << proc1 << proc2;
-
-    // 工单2
-    WorkOrder wo2;
-    wo2.workOrderId = "WO20260702002";
-    wo2.name = "20260702-B批次工单";
-    WorkProcess proc3;
-    proc3.processId = "PROC_003";
-    proc3.name = "组装工序";
-    wo2.vecProcessId << proc3;
-
-    // 工单列表挂载到产品
-    fakeProduct.workOrderList.vecWorkOrder << wo1 << wo2;
-    // 产品挂载到产线
-    fakeLine.vecPdList << fakeProduct;
-    // 存入全局缓存
-    m_allPdLineData << fakeLine;
-
-    // 自动填充产品线下拉
-    ui->comboBox_pdLineList->clear();
-    ui->comboBox_pdLineList->addItem(fakeLine.name);
-    // 触发下拉联动，自动填充产品、工单、工序
-    on_comboBox_pdLineList_currentIndexChanged(0);
 
     ui->lineEdit_user->setText("admin");
     ui->lineEdit_passwd->setText("123456");

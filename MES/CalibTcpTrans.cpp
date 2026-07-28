@@ -160,28 +160,30 @@ void CalibTcpTrans::tcpReceive()
     if (curCtx->m_nDataSize > 0)
         return;
 
-    // 完整数据包接收完成，业务分发
+    // 完整数据包接收完成，业务分发（已适配新版同步 MesHttpPost）
     if (Material == curCtx->m_nCurType)
     {
-        // QString strMaterial = MesHttpPost::Instance()->GetMaterialInfo();
-        //SendMesResult(socket, Material, true, strMaterial);
+        // 新版 MesHttpPost 无 GetMaterialInfo 接口，暂保留
     }
     else if (SN == curCtx->m_nCurType)
     {
-        QString sn = curCtx->m_DataArray;
-        //MesHttpPost::Instance()->CheckValidateNumber(sn);
+        QString sn = QString::fromUtf8(curCtx->m_DataArray);
+        bool outValidate = false;
+        QString err = MesHttpPost::Instance()->ValidateNumber(sn, outValidate);
+        QString resultMsg = err.isEmpty() ? "校验通过" : err;
+        SendMesResult(socket, SN, err.isEmpty(), resultMsg);
     }
     else if (CalibData == curCtx->m_nCurType)
     {
-        //MesHttpPost::Instance()->SaveCalibrationResultFileContent(curCtx->m_DataArray);
+        // 新版 MesHttpPost 无 SaveCalibrationResultFileContent 接口，暂保留
     }
     else if (CalibResult == curCtx->m_nCurType)
     {
-        //MesHttpPost::Instance()->SaveProductTestResult(curCtx->m_DataArray);
+        // 新版 MesHttpPost 无 SaveProductTestResult 接口，暂保留
     }
     else if (TaskResult == curCtx->m_nCurType)
     {
-        //MesHttpPost::Instance()->SaveCompleteTask(curCtx->m_DataArray);
+        // 新版 MesHttpPost 无 SaveCompleteTask 接口，暂保留
     }
 
     // 清空当前客户端缓存

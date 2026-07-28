@@ -64,7 +64,7 @@ void ControlCenterHttpApi::SetCtrlIpInfo(const QString &ip, const QString &port)
 
 QString ControlCenterHttpApi::GetCtrlBaseUrl() const
 {
-    return QString("http://%1:%2/mes/service/hirsain/ipeo/").arg(m_ctrlIp).arg(m_ctrlPort);
+    return QString("http://%1:%2/mes/service/hirain/ipeo/").arg(m_ctrlIp).arg(m_ctrlPort);
 }
 
 bool ControlCenterHttpApi::WaitRequestFinish(QNetworkReply *reply, int timeoutMs)
@@ -76,7 +76,7 @@ bool ControlCenterHttpApi::WaitRequestFinish(QNetworkReply *reply, int timeoutMs
     connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
     timer.start(timeoutMs);
     loop.exec();
-    return !timer.isActive();
+    return timer.isActive();
 }
 
 void ControlCenterHttpApi::ClearRequestContext(QNetworkReply *reply)
@@ -396,7 +396,7 @@ QString ControlCenterHttpApi::UploadDeviceAlarmEvent(const QString& deviceCode, 
     body["deviceCode"] = deviceCode;
     body["deviceIp"] = deviceIp;
     body["sourceAlarmEvent"] = sourceAlarmEvent;
-    body["alarmTime"] = alarmTime.toString("yyyy-MM-ddTHH:mm:ss.000");
+    body["alarmTime"] = alarmTime.toString("yyyy-MM-ddTHH:mm:ss.zzz");
     return SendCtrlRequest(ctrlDeviceAlarmEvent, "upload/deviceAlarmEvent", false, body);
 }
 

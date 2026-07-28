@@ -77,7 +77,7 @@ bool MesHttpPost::WaitRequestFinish(QNetworkReply *reply, int timeoutMs)
     connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
     timer.start(timeoutMs);
     loop.exec();
-    return !timer.isActive();
+    return timer.isActive();
 }
 
 // 私有底层实现，仅内部使用void*
@@ -699,7 +699,7 @@ QString MesHttpPost::ValidateStandardElementNumber(const QString& sn,bool& outSt
     QJsonObject body;
     body["number"] = sn;
     body["processKey"] = m_processKey;
-    return SendMesPostRequest(replyValidateStandardElementNumber, "validateStandardElement", body,outStandard);
+    return SendMesPostRequest(replyValidateStandardElementNumber, "validateStandardElementNumber", body,outStandard);
 }
 
 QString MesHttpPost::ValidateNumber(const QString& sn,bool& outValidate)
